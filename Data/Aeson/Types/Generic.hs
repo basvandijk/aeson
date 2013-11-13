@@ -25,9 +25,8 @@ import Control.Monad.ST (ST)
 import Data.Aeson.Types.Instances
 import Data.Aeson.Types.Internal
 import Data.Bits
-import Data.DList (DList, toList, empty)
 import Data.Maybe (fromMaybe)
-import Data.Monoid (mappend)
+import Data.Monoid (Monoid, mempty, mappend)
 import Data.Text (Text, pack, unpack)
 import GHC.Generics
 import qualified Data.HashMap.Strict as H
@@ -223,14 +222,14 @@ instance (Selector s, GToJSON a) => RecordToPairs (S1 s a) where
 
 instance (Selector s, ToJSON a) => RecordToPairs (S1 s (K1 i (Maybe a))) where
     recordToPairs opts (M1 k1) | omitNothingFields opts
-                               , K1 Nothing <- k1 = empty
+                               , K1 Nothing <- k1 = mempty
     recordToPairs opts m1 = fieldToPair opts m1
     {-# INLINE recordToPairs #-}
 
 fieldToPair :: (Selector s, GToJSON a) => Options -> S1 s a p -> DList Pair
-fieldToPair opts m1 = pure ( pack $ fieldLabelModifier opts $ selName m1
-                           , gToJSON opts (unM1 m1)
-                           )
+fieldToPair opts m1 = singleton ( pack $ fieldLabelModifier opts $ selName m1
+                                , gToJSON opts (unM1 m1)
+                                )
 {-# INLINE fieldToPair #-}
 
 --------------------------------------------------------------------------------
@@ -599,6 +598,30 @@ instance And True  False False
 newtype Tagged s b = Tagged {unTagged :: b}
 
 newtype Tagged2 (s :: * -> *) b = Tagged2 {unTagged2 :: b}
+
+--------------------------------------------------------------------------------
+
+newtype DList a = DL { unDL :: [a] -> [a] }
+
+toList :: DList a -> [a]
+toList = ($[]) . unDL
+{-# INLINE toList #-}
+
+singleton   :: a -> DList a
+singleton   = DL . (:)
+{-# INLINE singleton #-}
+
+empty :: DList a
+empty = DL id
+{-# INLINE empty #-}
+
+append :: DList a -> DList a -> DList a
+append xs ys = DL (unDL xs . unDL ys)
+{-# INLINE append #-}
+
+instance Monoid (DList a) where
+    mempty  = empty
+    mappend = append
 
 --------------------------------------------------------------------------------
 
