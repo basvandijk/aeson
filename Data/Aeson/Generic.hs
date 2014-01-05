@@ -27,12 +27,14 @@ module Data.Aeson.Generic
     , toJSON
     ) where
 
+import Control.Arrow ((***))
 import Control.Applicative ((<$>))
 import Control.Arrow (first)
 import Control.Monad.State.Strict
 import Data.Aeson.Functions
 import Data.Aeson.Types hiding (FromJSON(..), ToJSON(..), fromJSON)
 import Data.Attoparsec.Number (Number)
+import Data.Foldable (foldMap)
 import Data.Generics
 import Data.Hashable (Hashable)
 import Data.Int (Int8, Int16, Int32, Int64)
@@ -41,6 +43,7 @@ import Data.Maybe (fromJust)
 import Data.Text (Text, pack, unpack)
 import Data.Time.Clock (UTCTime)
 import Data.Word (Word, Word8, Word16, Word32, Word64)
+import Data.Aeson.Types.Internal
 import Data.Aeson.Parser.Internal (decodeWith, json, json')
 import qualified Data.Aeson.Encode as E
 import qualified Data.Aeson.Types as T
@@ -78,11 +81,11 @@ decode' :: (Data a) => L.ByteString -> Maybe a
 decode' = decodeWith json' fromJSON
 {-# INLINE decode' #-}
 
-type T a = a -> Value
+type T a = a -> JsonBuilder
 
-toJSON :: (Data a) => a -> Value
+toJSON :: (Data a) => a -> JsonBuilder
 toJSON = toJSON_generic
-         `ext1Q` maybe Null toJSON
+         `ext1Q` maybe jsonNull toJSON
          `ext1Q` list
          `ext1Q` vector
          `ext1Q` set
@@ -116,9 +119,19 @@ toJSON = toJSON_generic
          `extQ` (T.toJSON :: T ())
          --`extQ` (T.toJSON :: T Ordering)
   where
-    list xs = Array . V.fromList . map toJSON $ xs
-    vector v = Array . V.map toJSON $ v
-    set s = Array . V.fromList . map toJSON . Set.toList $ s
+    list []     = emptyArray
+    list (x:[]) = singletonArray $ toJSON x
+    list (x:xs) = many1Array (toJSON x) (foldMap (element . toJSON) xs)
+
+    vector v
+      | n == 0    = emptyArray
+      | n == 1    = singletonArray $ toJSON $ V.unsafeHead v
+      | otherwise = many1Array (toJSON $ V.unsafeHead v)
+                    (foldMap (element . toJSON) $ V.unsafeTail v)
+      where
+        n = V.length v
+
+    set s = list . Set.toList $ s
 
     mapAny m
       | tyrep == typeOf DT.empty = remap id
@@ -127,7 +140,10 @@ toJSON = toJSON_generic
       | otherwise = modError "toJSON" $
                              "cannot convert map keyed by type " ++ show tyrep
       where tyrep = typeOf . head . Map.keys $ m
-            remap f = Object . mapHashKeyVal (f . fromJust . cast) toJSON $ m
+            remap f =
+              object $
+              map ((f . fromJust . cast) *** toJSON) $
+              Map.toList m
 
     hashMapAny m
       | tyrep == typeOf DT.empty = remap id
@@ -136,9 +152,12 @@ toJSON = toJSON_generic
       | otherwise = modError "toJSON" $
                              "cannot convert map keyed by type " ++ show tyrep
       where tyrep = typeOf . head . H.keys $ m
-            remap f = Object . mapKeyVal (f . fromJust . cast) toJSON $ m
+            remap f =
+              object $
+              map ((f . fromJust . cast) *** toJSON) $
+              H.toList m
 
-toJSON_generic :: (Data a) => a -> Value
+toJSON_generic :: (Data a) => a -> JsonBuilder
 toJSON_generic = generic
   where
         -- Generic encoding of an algebraic data type.
@@ -146,7 +165,7 @@ toJSON_generic = generic
             case dataTypeRep (dataTypeOf a) of
                 -- No constructor, so it must be an error value.  Code
                 -- it anyway as Null.
-                AlgRep []  -> Null
+                AlgRep []  -> jsonNull
                 -- Elide a single constructor and just code the arguments.
                 AlgRep [c] -> encodeArgs c (gmapQ toJSON a)
                 -- For multiple constructors, make an object with a
@@ -162,15 +181,15 @@ toJSON_generic = generic
         -- name as the single field and the arguments as the value.
         -- Use an array if the are no field names, but elide singleton arrays,
         -- and use an object if there are field names.
-        encodeConstr c [] = String . constrString $ c
-        encodeConstr c as = object [(constrString c, encodeArgs c as)]
+        encodeConstr c [] = jsonText . constrString $ c
+        encodeConstr c as = object [constrString c .= encodeArgs c as]
 
         constrString = pack . showConstr
 
         encodeArgs c = encodeArgs' (constrFields c)
         encodeArgs' [] [j] = j
-        encodeArgs' [] js  = Array . V.fromList $ js
-        encodeArgs' ns js  = object $ zip (map pack ns) js
+        encodeArgs' [] js  = T.toJSON js
+        encodeArgs' ns js  = object $ zipWith (.=) (map pack ns) js
 
 
 fromJSON :: (Data a) => Value -> Result a

@@ -1,4 +1,4 @@
-{-# LANGUAGE CPP, FlexibleContexts #-}
+{-# LANGUAGE CPP, FlexibleContexts, TypeSynonymInstances, FlexibleInstances #-}
 
 #ifdef GENERICS
 {-# LANGUAGE DefaultSignatures #-}
@@ -21,6 +21,7 @@ module Data.Aeson.Types.Class
     -- ** Core JSON classes
       FromJSON(..)
     , ToJSON(..)
+    , Property(..)
 #ifdef GENERICS
     -- ** Generic JSON classes
     , GFromJSON(..)
@@ -31,6 +32,7 @@ module Data.Aeson.Types.Class
     ) where
 
 import Data.Aeson.Types.Internal
+import Data.Text (Text)
 
 #ifdef GENERICS
 import GHC.Generics
@@ -39,7 +41,7 @@ import GHC.Generics
 class GToJSON f where
     -- | This method (applied to 'defaultOptions') is used as the
     -- default generic implementation of 'toJSON'.
-    gToJSON :: Options -> f a -> Value
+    gToJSON :: Options -> f a -> JsonBuilder
 
 -- | Class of generic representation types ('Rep') that can be converted from JSON.
 class GFromJSON f where
@@ -50,13 +52,15 @@ class GFromJSON f where
 -- | A configurable generic JSON encoder. This function applied to
 -- 'defaultOptions' is used as the default for 'toJSON' when the type
 -- is an instance of 'Generic'.
-genericToJSON :: (Generic a, GToJSON (Rep a)) => Options -> a -> Value
+genericToJSON :: (Generic a, GToJSON (Rep a))
+              => Options -> a -> JsonBuilder
 genericToJSON opts = gToJSON opts . from
 
 -- | A configurable generic JSON decoder. This function applied to
 -- 'defaultOptions' is used as the default for 'parseJSON' when the
 -- type is an instance of 'Generic'.
-genericParseJSON :: (Generic a, GFromJSON (Rep a)) => Options -> Value -> Parser a
+genericParseJSON :: (Generic a, GFromJSON (Rep a))
+                 => Options -> Value -> Parser a
 genericParseJSON opts = fmap to . gParseJSON opts
 #endif
 
@@ -113,12 +117,28 @@ genericParseJSON opts = fmap to . gParseJSON opts
 --     toJSON = 'genericToJSON' 'defaultOptions'
 -- @
 class ToJSON a where
-    toJSON   :: a -> Value
+    toJSON   :: a -> JsonBuilder
 
 #ifdef GENERICS
-    default toJSON :: (Generic a, GToJSON (Rep a)) => a -> Value
+    default toJSON :: (Generic a, GToJSON (Rep a)) => a -> JsonBuilder
     toJSON = genericToJSON defaultOptions
 #endif
+
+class Property prop where
+    -- | Construct a property from a key and a value.
+    (.=) :: ToJSON a => Text -> a -> prop
+
+instance Property Pair where
+    name .= value = (name, toJSON value)
+    {-# INLINE (.=) #-}
+
+instance Property JsonFirstProperty where
+    name .= value = jsonFirstProperty name (toJSON value)
+    {-# INLINE (.=) #-}
+
+instance Property CommaPrefixedProperties where
+    name .= value = commaPrefixedProperty name (toJSON value)
+    {-# INLINE (.=) #-}
 
 -- | A type that can be converted from JSON, with the possibility of
 -- failure.

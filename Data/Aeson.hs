@@ -70,7 +70,7 @@ module Data.Aeson
     , withNumber
     , withBool
     -- * Constructors and accessors
-    , (.=)
+    , Property, (.=)
     , (.:)
     , (.:?)
     , (.!=)

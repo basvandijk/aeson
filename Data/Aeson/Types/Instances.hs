@@ -1,6 +1,7 @@
 {-# LANGUAGE CPP, DeriveDataTypeable, FlexibleContexts, FlexibleInstances,
     GeneralizedNewtypeDeriving, IncoherentInstances, OverlappingInstances,
-    OverloadedStrings, UndecidableInstances, ViewPatterns #-}
+    OverloadedStrings, UndecidableInstances, ViewPatterns,
+    MultiWayIf #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 
 #ifdef GENERICS
@@ -47,10 +48,11 @@ module Data.Aeson.Types.Instances
     , (.:)
     , (.:?)
     , (.!=)
-    , (.=)
+    , Property, (.=)
     , typeMismatch
     ) where
 
+import Control.Arrow ((***))
 import Control.Applicative ((<$>), (<*>), (<|>), pure, empty)
 import Data.Aeson.Functions
 import Data.Aeson.Types.Class
@@ -59,6 +61,7 @@ import Data.Scientific (Scientific)
 import qualified Data.Scientific as Scientific (coefficient, base10Exponent, fromFloatDigits)
 import Data.Attoparsec.Number (Number(..))
 import Data.Fixed
+import Data.Foldable (foldMap)
 import Data.Hashable (Hashable(..))
 import Data.Int (Int8, Int16, Int32, Int64)
 import Data.Maybe (fromMaybe)
@@ -86,11 +89,18 @@ import qualified Data.Vector.Generic as VG
 import qualified Data.Vector.Primitive as VP
 import qualified Data.Vector.Storable as VS
 import qualified Data.Vector.Unboxed as VU
-import qualified Data.Vector.Mutable as VM ( unsafeNew, unsafeWrite )
+
+#if MIN_VERSION_base(4,5,0)
+import Data.Monoid ((<>))
+#else
+(<>) :: Monoid m => m -> m -> m
+(<>) = mappend
+{-# INLINE (<>) #-}
+infixr 6 <>
+#endif
 
 instance (ToJSON a) => ToJSON (Maybe a) where
-    toJSON (Just a) = toJSON a
-    toJSON Nothing  = Null
+    toJSON = maybe jsonNull toJSON
     {-# INLINE toJSON #-}
 
 instance (FromJSON a) => FromJSON (Maybe a) where
@@ -99,8 +109,8 @@ instance (FromJSON a) => FromJSON (Maybe a) where
     {-# INLINE parseJSON #-}
 
 instance (ToJSON a, ToJSON b) => ToJSON (Either a b) where
-    toJSON (Left a)  = object [left  .= a]
-    toJSON (Right b) = object [right .= b]
+    toJSON = either (singletonObject . (left  .=))
+                    (singletonObject . (right .=))
     {-# INLINE toJSON #-}
 
 instance (FromJSON a, FromJSON b) => FromJSON (Either a b) where
@@ -115,7 +125,7 @@ left  = "Left"
 right = "Right"
 
 instance ToJSON Bool where
-    toJSON = Bool
+    toJSON = \true -> if true then jsonTrue else jsonFalse
     {-# INLINE toJSON #-}
 
 instance FromJSON Bool where
@@ -123,7 +133,7 @@ instance FromJSON Bool where
     {-# INLINE parseJSON #-}
 
 instance ToJSON () where
-    toJSON _ = emptyArray
+    toJSON = const emptyArray
     {-# INLINE toJSON #-}
 
 instance FromJSON () where
@@ -134,7 +144,7 @@ instance FromJSON () where
     {-# INLINE parseJSON #-}
 
 instance ToJSON [Char] where
-    toJSON = String . T.pack
+    toJSON = jsonString
     {-# INLINE toJSON #-}
 
 instance FromJSON [Char] where
@@ -142,7 +152,7 @@ instance FromJSON [Char] where
     {-# INLINE parseJSON #-}
 
 instance ToJSON Char where
-    toJSON = String . T.singleton
+    toJSON = jsonChar
     {-# INLINE toJSON #-}
 
 instance FromJSON Char where
@@ -153,7 +163,7 @@ instance FromJSON Char where
     {-# INLINE parseJSON #-}
 
 instance ToJSON Scientific where
-    toJSON = Number
+    toJSON = jsonScientific
     {-# INLINE toJSON #-}
 
 instance FromJSON Scientific where
@@ -164,10 +174,10 @@ instance ToJSON Double where
     toJSON = realFloatToJSON
     {-# INLINE toJSON #-}
 
-realFloatToJSON :: RealFloat a => a -> Value
+realFloatToJSON :: RealFloat a => a -> JsonBuilder
 realFloatToJSON d
-    | isNaN d || isInfinite d = Null
-    | otherwise = Number $ Scientific.fromFloatDigits d
+    | isNaN d || isInfinite d = jsonNull
+    | otherwise = jsonScientific $ Scientific.fromFloatDigits d
 {-# INLINE realFloatToJSON #-}
 
 instance FromJSON Double where
@@ -198,19 +208,22 @@ instance FromJSON Float where
     {-# INLINE parseJSON #-}
 
 instance ToJSON (Ratio Integer) where
-    toJSON r = object [ "numerator"   .= numerator   r
-                      , "denominator" .= denominator r
-                      ]
+    toJSON r = many1Object (numeratorTxt   .= numerator   r)
+                           (denominatorTxt .= denominator r)
     {-# INLINE toJSON #-}
+
+numeratorTxt, denominatorTxt :: Text
+numeratorTxt   = "numerator"
+denominatorTxt = "denominator"
 
 instance FromJSON (Ratio Integer) where
     parseJSON = withObject "Rational" $ \obj ->
-                  (%) <$> obj .: "numerator"
-                      <*> obj .: "denominator"
+                  (%) <$> obj .: numeratorTxt
+                      <*> obj .: denominatorTxt
     {-# INLINE parseJSON #-}
 
 instance HasResolution a => ToJSON (Fixed a) where
-    toJSON = Number . realToFrac
+    toJSON = jsonScientific . realToFrac
     {-# INLINE toJSON #-}
 
 instance HasResolution a => FromJSON (Fixed a) where
@@ -218,7 +231,7 @@ instance HasResolution a => FromJSON (Fixed a) where
     {-# INLINE parseJSON #-}
 
 instance ToJSON Int where
-    toJSON = Number . fromIntegral
+    toJSON = jsonInt
     {-# INLINE toJSON #-}
 
 instance FromJSON Int where
@@ -230,7 +243,7 @@ parseIntegral = withScientific "Integral" $ pure . floor
 {-# INLINE parseIntegral #-}
 
 instance ToJSON Integer where
-    toJSON = Number . fromInteger
+    toJSON = jsonInteger
     {-# INLINE toJSON #-}
 
 instance FromJSON Integer where
@@ -238,7 +251,7 @@ instance FromJSON Integer where
     {-# INLINE parseJSON #-}
 
 instance ToJSON Int8 where
-    toJSON = Number . fromIntegral
+    toJSON = jsonInt8
     {-# INLINE toJSON #-}
 
 instance FromJSON Int8 where
@@ -246,7 +259,7 @@ instance FromJSON Int8 where
     {-# INLINE parseJSON #-}
 
 instance ToJSON Int16 where
-    toJSON = Number . fromIntegral
+    toJSON = jsonInt16
     {-# INLINE toJSON #-}
 
 instance FromJSON Int16 where
@@ -254,7 +267,7 @@ instance FromJSON Int16 where
     {-# INLINE parseJSON #-}
 
 instance ToJSON Int32 where
-    toJSON = Number . fromIntegral
+    toJSON = jsonInt32
     {-# INLINE toJSON #-}
 
 instance FromJSON Int32 where
@@ -262,7 +275,7 @@ instance FromJSON Int32 where
     {-# INLINE parseJSON #-}
 
 instance ToJSON Int64 where
-    toJSON = Number . fromIntegral
+    toJSON = jsonInt64
     {-# INLINE toJSON #-}
 
 instance FromJSON Int64 where
@@ -270,7 +283,7 @@ instance FromJSON Int64 where
     {-# INLINE parseJSON #-}
 
 instance ToJSON Word where
-    toJSON = Number . fromIntegral
+    toJSON = jsonWord
     {-# INLINE toJSON #-}
 
 instance FromJSON Word where
@@ -278,7 +291,7 @@ instance FromJSON Word where
     {-# INLINE parseJSON #-}
 
 instance ToJSON Word8 where
-    toJSON = Number . fromIntegral
+    toJSON = jsonWord8
     {-# INLINE toJSON #-}
 
 instance FromJSON Word8 where
@@ -286,7 +299,7 @@ instance FromJSON Word8 where
     {-# INLINE parseJSON #-}
 
 instance ToJSON Word16 where
-    toJSON = Number . fromIntegral
+    toJSON = jsonWord16
     {-# INLINE toJSON #-}
 
 instance FromJSON Word16 where
@@ -294,7 +307,7 @@ instance FromJSON Word16 where
     {-# INLINE parseJSON #-}
 
 instance ToJSON Word32 where
-    toJSON = Number . fromIntegral
+    toJSON = jsonWord32
     {-# INLINE toJSON #-}
 
 instance FromJSON Word32 where
@@ -302,7 +315,7 @@ instance FromJSON Word32 where
     {-# INLINE parseJSON #-}
 
 instance ToJSON Word64 where
-    toJSON = Number . fromIntegral
+    toJSON = jsonWord64
     {-# INLINE toJSON #-}
 
 instance FromJSON Word64 where
@@ -310,7 +323,7 @@ instance FromJSON Word64 where
     {-# INLINE parseJSON #-}
 
 instance ToJSON Text where
-    toJSON = String
+    toJSON = jsonText
     {-# INLINE toJSON #-}
 
 instance FromJSON Text where
@@ -318,7 +331,7 @@ instance FromJSON Text where
     {-# INLINE parseJSON #-}
 
 instance ToJSON LT.Text where
-    toJSON = String . LT.toStrict
+    toJSON = toJSON . LT.toStrict
     {-# INLINE toJSON #-}
 
 instance FromJSON LT.Text where
@@ -326,7 +339,10 @@ instance FromJSON LT.Text where
     {-# INLINE parseJSON #-}
 
 instance (ToJSON a) => ToJSON [a] where
-    toJSON = Array . V.fromList . map toJSON
+    toJSON []     = emptyArray
+    toJSON (x:[]) = singletonArray $ toJSON x
+    toJSON (x:xs) = many1Array (toJSON x)
+                               (foldMap (element . toJSON) xs)
     {-# INLINE toJSON #-}
 
 instance (FromJSON a) => FromJSON [a] where
@@ -334,35 +350,45 @@ instance (FromJSON a) => FromJSON [a] where
     {-# INLINE parseJSON #-}
 
 instance (ToJSON a) => ToJSON (Vector a) where
-    toJSON = Array . V.map toJSON
+    toJSON = vectorToJSON
     {-# INLINE toJSON #-}
+
+vectorToJSON :: (ToJSON a) => Vector a -> JsonBuilder
+vectorToJSON = eta
+    where
+      eta v
+        | n == 0    = emptyArray
+        | n == 1    = singletonArray h
+        | otherwise = many1Array h $ foldMap (element . toJSON) $
+                                             V.unsafeTail v
+        where
+          h = toJSON $ V.unsafeHead v
+          n = V.length v
+{-# INLINE vectorToJSON #-}
 
 instance (FromJSON a) => FromJSON (Vector a) where
     parseJSON = withArray "Vector a" $ V.mapM parseJSON
     {-# INLINE parseJSON #-}
 
-vectorToJSON :: (VG.Vector v a, ToJSON a) => v a -> Value
-vectorToJSON = Array . V.map toJSON . V.convert
-{-# INLINE vectorToJSON #-}
-
-vectorParseJSON :: (FromJSON a, VG.Vector w a) => String -> Value -> Parser (w a)
+vectorParseJSON :: (FromJSON a, VG.Vector w a)
+                => String -> Value -> Parser (w a)
 vectorParseJSON s = withArray s $ fmap V.convert . V.mapM parseJSON
 {-# INLINE vectorParseJSON #-}
 
 instance (Storable a, ToJSON a) => ToJSON (VS.Vector a) where
-    toJSON = vectorToJSON
+    toJSON = vectorToJSON . VG.convert
 
 instance (Storable a, FromJSON a) => FromJSON (VS.Vector a) where
     parseJSON = vectorParseJSON "Data.Vector.Storable.Vector a"
 
 instance (VP.Prim a, ToJSON a) => ToJSON (VP.Vector a) where
-    toJSON = vectorToJSON
+    toJSON = vectorToJSON . VG.convert
 
 instance (VP.Prim a, FromJSON a) => FromJSON (VP.Vector a) where
     parseJSON = vectorParseJSON "Data.Vector.Primitive.Vector a"
 
 instance (VG.Vector VU.Vector a, ToJSON a) => ToJSON (VU.Vector a) where
-    toJSON = vectorToJSON
+    toJSON = vectorToJSON . VG.convert
 
 instance (VG.Vector VU.Vector a, FromJSON a) => FromJSON (VU.Vector a) where
     parseJSON = vectorParseJSON "Data.Vector.Unboxed.Vector a"
@@ -400,61 +426,80 @@ instance FromJSON a => FromJSON (IntMap.IntMap a) where
     {-# INLINE parseJSON #-}
 
 instance (ToJSON v) => ToJSON (M.Map Text v) where
-    toJSON = Object . M.foldrWithKey (\k -> H.insert k . toJSON) H.empty
+    toJSON = objectMap id . M.toList
     {-# INLINE toJSON #-}
+
+objectMap :: (ToJSON v) => (k -> Text) -> [(k, v)] -> JsonBuilder
+objectMap f = object . map (f *** toJSON)
+{-# INLINE objectMap #-}
 
 instance (FromJSON v) => FromJSON (M.Map Text v) where
     parseJSON = withObject "Map Text a" $
                   fmap (H.foldrWithKey M.insert M.empty) . traverse parseJSON
+    {-# INLINE parseJSON #-}
 
 instance (ToJSON v) => ToJSON (M.Map LT.Text v) where
-    toJSON = Object . mapHashKeyVal LT.toStrict toJSON
+    toJSON = objectMap LT.toStrict . M.toList
+    {-# INLINE toJSON #-}
 
 instance (FromJSON v) => FromJSON (M.Map LT.Text v) where
     parseJSON = fmap (hashMapKey LT.fromStrict) . parseJSON
+    {-# INLINE parseJSON #-}
 
 instance (ToJSON v) => ToJSON (M.Map String v) where
-    toJSON = Object . mapHashKeyVal pack toJSON
+    toJSON = objectMap pack . M.toList
+    {-# INLINE toJSON #-}
 
 instance (FromJSON v) => FromJSON (M.Map String v) where
     parseJSON = fmap (hashMapKey unpack) . parseJSON
+    {-# INLINE parseJSON #-}
 
 instance (ToJSON v) => ToJSON (H.HashMap Text v) where
-    toJSON = Object . H.map toJSON
+    toJSON = objectMap id . H.toList
     {-# INLINE toJSON #-}
 
 instance (FromJSON v) => FromJSON (H.HashMap Text v) where
     parseJSON = withObject "HashMap Text a" $ traverse parseJSON
+    {-# INLINE parseJSON #-}
 
 instance (ToJSON v) => ToJSON (H.HashMap LT.Text v) where
-    toJSON = Object . mapKeyVal LT.toStrict toJSON
+    toJSON = objectMap LT.toStrict . H.toList
+    {-# INLINE toJSON #-}
 
 instance (FromJSON v) => FromJSON (H.HashMap LT.Text v) where
     parseJSON = fmap (mapKey LT.fromStrict) . parseJSON
 
 instance (ToJSON v) => ToJSON (H.HashMap String v) where
-    toJSON = Object . mapKeyVal pack toJSON
+    toJSON = objectMap pack . H.toList
+    {-# INLINE toJSON #-}
 
 instance (FromJSON v) => FromJSON (H.HashMap String v) where
     parseJSON = fmap (mapKey unpack) . parseJSON
+    {-# INLINE parseJSON #-}
 
 instance (ToJSON v) => ToJSON (Tree.Tree v) where
-    toJSON (Tree.Node root branches) = toJSON (root,branches)
+    toJSON (Tree.Node root branches) = toJSON (root, branches)
+    {-# INLINE toJSON #-}
 
 instance (FromJSON v) => FromJSON (Tree.Tree v) where
-    parseJSON j = uncurry Tree.Node <$> parseJSON j
+    parseJSON = fmap (uncurry Tree.Node) . parseJSON
+    {-# INLINE parseJSON #-}
+
+instance ToJSON JsonBuilder where
+    toJSON = id
+    {-# INLINE toJSON #-}
 
 instance ToJSON Value where
-    toJSON a = a
+    toJSON = jsonValue
     {-# INLINE toJSON #-}
 
 instance FromJSON Value where
-    parseJSON a = pure a
+    parseJSON = pure
     {-# INLINE parseJSON #-}
 
 instance ToJSON DotNetTime where
     toJSON (DotNetTime t) =
-        String (pack (secs ++ formatMillis t ++ ")/"))
+        jsonString (secs ++ formatMillis t ++ ")/")
       where secs  = formatTime defaultTimeLocale "/Date(%s" t
     {-# INLINE toJSON #-}
 
@@ -468,7 +513,7 @@ instance FromJSON DotNetTime where
     {-# INLINE parseJSON #-}
 
 instance ToJSON ZonedTime where
-    toJSON t = String $ pack $ formatTime defaultTimeLocale format t
+    toJSON t = jsonString $ formatTime defaultTimeLocale format t
       where
         format = "%FT%T." ++ formatMillis t ++ tzFormat
         tzFormat
@@ -500,7 +545,7 @@ instance FromJSON ZonedTime where
     parseJSON v = typeMismatch "ZonedTime" v
 
 instance ToJSON UTCTime where
-    toJSON t = String (pack (str ++ z : "Z"))
+    toJSON t = jsonString (str ++ z : "Z")
       where (str,(x:y:_)) = splitAt 22 $
                             formatTime defaultTimeLocale "%FT%T.%q" t
             z | y < '5'   = x
@@ -515,11 +560,8 @@ instance FromJSON UTCTime where
     {-# INLINE parseJSON #-}
 
 instance (ToJSON a, ToJSON b) => ToJSON (a,b) where
-    toJSON (a,b) = Array $ V.create $ do
-                     mv <- VM.unsafeNew 2
-                     VM.unsafeWrite mv 0 (toJSON a)
-                     VM.unsafeWrite mv 1 (toJSON b)
-                     return mv
+    toJSON (a,b) = many1Array (toJSON a) $
+                      element (toJSON b)
     {-# INLINE toJSON #-}
 
 instance (FromJSON a, FromJSON b) => FromJSON (a,b) where
@@ -533,12 +575,9 @@ instance (FromJSON a, FromJSON b) => FromJSON (a,b) where
     {-# INLINE parseJSON #-}
 
 instance (ToJSON a, ToJSON b, ToJSON c) => ToJSON (a,b,c) where
-    toJSON (a,b,c) = Array $ V.create $ do
-                       mv <- VM.unsafeNew 3
-                       VM.unsafeWrite mv 0 (toJSON a)
-                       VM.unsafeWrite mv 1 (toJSON b)
-                       VM.unsafeWrite mv 2 (toJSON c)
-                       return mv
+    toJSON (a,b,c) = many1Array (toJSON a) $
+                        element (toJSON b) <>
+                        element (toJSON c)
     {-# INLINE toJSON #-}
 
 instance (FromJSON a, FromJSON b, FromJSON c) => FromJSON (a,b,c) where
@@ -553,13 +592,10 @@ instance (FromJSON a, FromJSON b, FromJSON c) => FromJSON (a,b,c) where
     {-# INLINE parseJSON #-}
 
 instance (ToJSON a, ToJSON b, ToJSON c, ToJSON d) => ToJSON (a,b,c,d) where
-    toJSON (a,b,c,d) = Array $ V.create $ do
-                         mv <- VM.unsafeNew 4
-                         VM.unsafeWrite mv 0 (toJSON a)
-                         VM.unsafeWrite mv 1 (toJSON b)
-                         VM.unsafeWrite mv 2 (toJSON c)
-                         VM.unsafeWrite mv 3 (toJSON d)
-                         return mv
+    toJSON (a,b,c,d) = many1Array (toJSON a) $
+                          element (toJSON b) <>
+                          element (toJSON c) <>
+                          element (toJSON d)
     {-# INLINE toJSON #-}
 
 instance (FromJSON a, FromJSON b, FromJSON c, FromJSON d) => FromJSON (a,b,c,d) where
@@ -575,14 +611,11 @@ instance (FromJSON a, FromJSON b, FromJSON c, FromJSON d) => FromJSON (a,b,c,d) 
     {-# INLINE parseJSON #-}
 
 instance (ToJSON a, ToJSON b, ToJSON c, ToJSON d, ToJSON e) => ToJSON (a,b,c,d,e) where
-    toJSON (a,b,c,d,e) = Array $ V.create $ do
-                           mv <- VM.unsafeNew 5
-                           VM.unsafeWrite mv 0 (toJSON a)
-                           VM.unsafeWrite mv 1 (toJSON b)
-                           VM.unsafeWrite mv 2 (toJSON c)
-                           VM.unsafeWrite mv 3 (toJSON d)
-                           VM.unsafeWrite mv 4 (toJSON e)
-                           return mv
+    toJSON (a,b,c,d,e) = many1Array (toJSON a) $
+                            element (toJSON b) <>
+                            element (toJSON c) <>
+                            element (toJSON d) <>
+                            element (toJSON e)
     {-# INLINE toJSON #-}
 
 instance (FromJSON a, FromJSON b, FromJSON c, FromJSON d, FromJSON e) => FromJSON (a,b,c,d,e) where
@@ -599,15 +632,12 @@ instance (FromJSON a, FromJSON b, FromJSON c, FromJSON d, FromJSON e) => FromJSO
     {-# INLINE parseJSON #-}
 
 instance (ToJSON a, ToJSON b, ToJSON c, ToJSON d, ToJSON e, ToJSON f) => ToJSON (a,b,c,d,e,f) where
-    toJSON (a,b,c,d,e,f) = Array $ V.create $ do
-                             mv <- VM.unsafeNew 6
-                             VM.unsafeWrite mv 0 (toJSON a)
-                             VM.unsafeWrite mv 1 (toJSON b)
-                             VM.unsafeWrite mv 2 (toJSON c)
-                             VM.unsafeWrite mv 3 (toJSON d)
-                             VM.unsafeWrite mv 4 (toJSON e)
-                             VM.unsafeWrite mv 5 (toJSON f)
-                             return mv
+    toJSON (a,b,c,d,e,f) = many1Array (toJSON a) $
+                              element (toJSON b) <>
+                              element (toJSON c) <>
+                              element (toJSON d) <>
+                              element (toJSON e) <>
+                              element (toJSON f)
     {-# INLINE toJSON #-}
 
 instance (FromJSON a, FromJSON b, FromJSON c, FromJSON d, FromJSON e, FromJSON f) => FromJSON (a,b,c,d,e,f) where
@@ -625,16 +655,13 @@ instance (FromJSON a, FromJSON b, FromJSON c, FromJSON d, FromJSON e, FromJSON f
     {-# INLINE parseJSON #-}
 
 instance (ToJSON a, ToJSON b, ToJSON c, ToJSON d, ToJSON e, ToJSON f, ToJSON g) => ToJSON (a,b,c,d,e,f,g) where
-    toJSON (a,b,c,d,e,f,g) = Array $ V.create $ do
-                               mv <- VM.unsafeNew 7
-                               VM.unsafeWrite mv 0 (toJSON a)
-                               VM.unsafeWrite mv 1 (toJSON b)
-                               VM.unsafeWrite mv 2 (toJSON c)
-                               VM.unsafeWrite mv 3 (toJSON d)
-                               VM.unsafeWrite mv 4 (toJSON e)
-                               VM.unsafeWrite mv 5 (toJSON f)
-                               VM.unsafeWrite mv 6 (toJSON g)
-                               return mv
+    toJSON (a,b,c,d,e,f,g) = many1Array (toJSON a) $
+                                element (toJSON b) <>
+                                element (toJSON c) <>
+                                element (toJSON d) <>
+                                element (toJSON e) <>
+                                element (toJSON f) <>
+                                element (toJSON g)
     {-# INLINE toJSON #-}
 
 instance (FromJSON a, FromJSON b, FromJSON c, FromJSON d, FromJSON e, FromJSON f, FromJSON g) => FromJSON (a,b,c,d,e,f,g) where
@@ -717,11 +744,6 @@ withBool :: String -> (Bool -> Parser a) -> Value -> Parser a
 withBool _        f (Bool arr) = f arr
 withBool expected _ v          = typeMismatch expected v
 {-# INLINE withBool #-}
-
--- | Construct a 'Pair' from a key and a value.
-(.=) :: ToJSON a => Text -> a -> Pair
-name .= value = (name, toJSON value)
-{-# INLINE (.=) #-}
 
 -- | Convert a value from JSON, failing if the types do not match.
 fromJSON :: (FromJSON a) => Value -> Result a

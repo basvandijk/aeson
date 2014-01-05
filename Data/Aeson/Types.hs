@@ -16,10 +16,7 @@ module Data.Aeson.Types
     -- * Core JSON types
       Value(..)
     , Array
-    , emptyArray
-    , Pair
     , Object
-    , emptyObject
     -- * Convenience types and functions
     , DotNetTime(..)
     , typeMismatch
@@ -31,8 +28,9 @@ module Data.Aeson.Types
     , parse
     , parseEither
     , parseMaybe
-    , ToJSON(..)
     , modifyFailure
+    , ToJSON(..)
+    , JsonBuilder
 
 #ifdef GENERICS
     -- ** Generic JSON classes
@@ -50,12 +48,34 @@ module Data.Aeson.Types
     , withScientific
     , withBool
 
-    -- * Constructors and accessors
-    , (.=)
+    -- * Constructors
+    , jsonNull
+
+      -- ** Booleans
+    , jsonTrue
+    , jsonFalse
+
+    -- ** Arrays
+    , emptyArray
+    , singletonArray
+    , many1Array
+    , CommaPrefixedElements
+    , element
+
+      -- ** Objects
+    , emptyObject
+    , singletonObject
+    , many1Object
+    , JsonFirstProperty, jsonFirstProperty
+    , CommaPrefixedProperties, commaPrefixedProperty
+    , Property, (.=)
+    , Pair
+    , object
+
+    -- * Accessors
     , (.:)
     , (.:?)
     , (.!=)
-    , object
 
     -- * Generic and TH encoding configuration
     , Options(..)

@@ -86,6 +86,10 @@ import Data.Aeson.Types ( Value(..), Parser
                         , SumEncoding(..)
                         , defaultOptions
                         , defaultTaggedObject
+
+                        , many1Array, element
+                        , many1Object, jsonFirstProperty
+                        , commaPrefixedProperty, singletonObject
                         )
 -- from base:
 import Control.Applicative ( pure, (<$>), (<*>) )
@@ -96,9 +100,10 @@ import Data.Function       ( ($), (.) )
 import Data.Functor        ( fmap )
 import Data.Int            ( Int )
 import Data.Either         ( Either(Left, Right) )
-import Data.List           ( (++), foldl, foldl', intercalate
+import Data.List           ( (++), foldr, foldl, foldl', intercalate
                            , length, map, zip, genericLength, all, partition
                            )
+import Data.Monoid         ( mempty, mappend )
 import Data.Maybe          ( Maybe(Nothing, Just), catMaybes )
 import Prelude             ( String, (-), Integer, fromIntegral, error )
 import Text.Printf         ( printf )
@@ -115,8 +120,7 @@ import Language.Haskell.TH.Syntax ( VarStrictType )
 -- from text:
 import qualified Data.Text as T ( Text, pack, unpack )
 -- from vector:
-import qualified Data.Vector as V ( unsafeIndex, null, length, create, fromList )
-import qualified Data.Vector.Mutable as VM ( unsafeNew, unsafeWrite )
+import qualified Data.Vector as V ( unsafeIndex, null, length )
 
 
 --------------------------------------------------------------------------------
@@ -215,7 +219,7 @@ consToJSON opts cons = do
         | otherwise = [encodeArgs opts True con | con <- cons]
 
 conStr :: Options -> Name -> Q Exp
-conStr opts = appE [|String|] . conTxt opts
+conStr opts = appE [|toJSON|] . conTxt opts
 
 conTxt :: Options -> Name -> Q Exp
 conTxt opts = appE [|T.pack|] . conStringE opts
@@ -233,16 +237,17 @@ encodeSum opts multiCons conName exp
     | multiCons =
         case sumEncoding opts of
           TwoElemArray ->
-              [|Array|] `appE` ([|V.fromList|] `appE` listE [conStr opts conName, exp])
+              [|many1Array|] `appE` conStr opts conName
+                             `appE` ([|element|] `appE` exp)
           TaggedObject{tagFieldName, contentsFieldName} ->
-              [|object|] `appE` listE
-                [ infixApp [|T.pack tagFieldName|]     [|(.=)|] (conStr opts conName)
-                , infixApp [|T.pack contentsFieldName|] [|(.=)|] exp
-                ]
+              [|many1Object|] `appE`
+              ([|jsonFirstProperty|] `appE` [|T.pack tagFieldName|]
+                                     `appE` conStr opts conName) `appE`
+              ([|commaPrefixedProperty|] `appE`
+               [|T.pack contentsFieldName|] `appE` exp)
           ObjectWithSingleField ->
-              [|object|] `appE` listE
-                [ infixApp (conTxt opts conName) [|(.=)|] exp
-                ]
+              [|singletonObject|] `appE`
+              ([|jsonFirstProperty|] `appE` conTxt opts conName `appE` exp)
 
     | otherwise = exp
 
@@ -261,25 +266,13 @@ encodeArgs opts multiCons (NormalC conName ts) = do
     let len = length ts
     args <- mapM newName ["arg" ++ show n | n <- [1..len]]
     js <- case [[|toJSON|] `appE` varE arg | arg <- args] of
+            [] -> error "The impossible happened!"
             -- Single argument is directly converted.
             [e] -> return e
             -- Multiple arguments are converted to a JSON array.
-            es  -> do
-              mv <- newName "mv"
-              let newMV = bindS (varP mv)
-                                ([|VM.unsafeNew|] `appE`
-                                  litE (integerL $ fromIntegral len))
-                  stmts = [ noBindS $
-                              [|VM.unsafeWrite|] `appE`
-                                (varE mv) `appE`
-                                  litE (integerL ix) `appE`
-                                    e
-                          | (ix, e) <- zip [(0::Integer)..] es
-                          ]
-                  ret = noBindS $ [|return|] `appE` varE mv
-              return $ [|Array|] `appE`
-                         (varE 'V.create `appE`
-                           doE (newMV:stmts++[ret]))
+            frst:es -> return $ [|many1Array|] `appE` frst `appE`
+                (foldr (\e -> ([|mappend|] `appE` ([|element|] `appE` e) `appE`))
+                       [|mempty|] es)
     match (conP conName $ map varP args)
           (normalB $ encodeSum opts multiCons conName js)
           []
