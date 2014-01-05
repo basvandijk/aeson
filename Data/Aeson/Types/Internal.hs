@@ -84,15 +84,21 @@ module Data.Aeson.Types.Internal
     , defaultOptions
     , defaultTaggedObject
 
+    -- * Used for changing CamelCase names into something else.
+    , camelTo
+
     -- * Other types
     , DotNetTime(..)
     ) where
 
+
 import Control.Applicative
 import Control.Monad
 import Control.DeepSeq (NFData(..))
+import Data.Char (toLower, isUpper)
 import Data.Scientific (Scientific)
 import Data.Hashable (Hashable(..))
+import Data.Data (Data)
 import Data.HashMap.Strict (HashMap)
 import Data.Foldable (Foldable, foldMap)
 import Data.Int
@@ -544,7 +550,7 @@ data Value = Object !Object
            | Number !Scientific
            | Bool !Bool
            | Null
-             deriving (Eq, Show, Typeable)
+             deriving (Eq, Show, Typeable, Data)
 
 -- | A newtype wrapper for 'UTCTime' that uses the same non-standard
 -- serialization format as Microsoft .NET, whose @System.DateTime@
@@ -569,15 +575,18 @@ instance IsString Value where
     fromString = String . pack
     {-# INLINE fromString #-}
 
+hashValue :: Int -> Value -> Int
+hashValue s (Object o)   = H.foldl' hashWithSalt
+                              (s `hashWithSalt` (0::Int)) o
+hashValue s (Array a)    = V.foldl' hashWithSalt
+                              (s `hashWithSalt` (1::Int)) a
+hashValue s (String str) = s `hashWithSalt` (2::Int) `hashWithSalt` str
+hashValue s (Number n)   = s `hashWithSalt` (3::Int) `hashWithSalt` n
+hashValue s (Bool b)     = s `hashWithSalt` (4::Int) `hashWithSalt` b
+hashValue s Null         = s `hashWithSalt` (5::Int)
+
 instance Hashable Value where
-    hashWithSalt s (Object o)   = H.foldl' hashWithSalt
-                                  (s `hashWithSalt` (0::Int)) o
-    hashWithSalt s (Array a)    = V.foldl' hashWithSalt
-                                  (s `hashWithSalt` (1::Int)) a
-    hashWithSalt s (String str) = s `hashWithSalt` (2::Int) `hashWithSalt` str
-    hashWithSalt s (Number n)   = s `hashWithSalt` (3::Int) `hashWithSalt` n
-    hashWithSalt s (Bool b)     = s `hashWithSalt` (4::Int) `hashWithSalt` b
-    hashWithSalt s Null         = s `hashWithSalt` (5::Int)
+    hashWithSalt = hashValue
 
 -- | Determines if the 'Value' is an empty 'Array'.
 -- Note that: @isEmptyArray 'emptyArray'@.
@@ -695,3 +704,25 @@ defaultTaggedObject = TaggedObject
                       { tagFieldName      = "tag"
                       , contentsFieldName = "contents"
                       }
+
+-- | Converts from CamelCase to another lower case, interspersing
+--   the character between all capital letters and their previous
+--   entries, except those capital letters that appear together,
+--   like 'API'.
+--
+--   For use by Aeson template haskell calls.
+--
+--   > camelTo '_' 'CamelCaseAPI' == "camel_case_api"
+camelTo :: Char -> String -> String
+camelTo c = lastWasCap True
+  where
+    lastWasCap :: Bool    -- ^ Previous was a capital letter
+              -> String  -- ^ The remaining string
+              -> String
+    lastWasCap _    []           = []
+    lastWasCap prev (x : xs)     = if isUpper x
+                                      then if prev
+                                             then toLower x : lastWasCap True xs
+                                             else c : toLower x : lastWasCap True xs
+                                      else x : lastWasCap False xs
+

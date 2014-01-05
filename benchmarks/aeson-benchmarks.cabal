@@ -33,7 +33,7 @@ executable aeson-compare-auto-instances
 
 executable aeson-benchmark-compare-with-json
   main-is: CompareWithJSON.hs
-  ghc-options: -Wall -O2
+  ghc-options: -Wall -O2 -rtsopts
   build-depends:
     aeson,
     base,
@@ -44,14 +44,14 @@ executable aeson-benchmark-compare-with-json
 
 executable aeson-benchmark-aeson-encode
   main-is: AesonEncode.hs
-  ghc-options: -Wall -O2
+  ghc-options: -Wall -O2 -rtsopts
   build-depends:
     aeson,
     base
 
 executable aeson-benchmark-aeson-parse
   main-is: AesonParse.hs
-  ghc-options: -Wall -O2
+  ghc-options: -Wall -O2 -rtsopts
   build-depends:
     aeson,
     attoparsec,
@@ -59,7 +59,7 @@ executable aeson-benchmark-aeson-parse
 
 executable aeson-benchmark-json-parse
   main-is: JsonParse.hs
-  ghc-options: -Wall -O2
+  ghc-options: -Wall -O2 -rtsopts
   build-depends:
     base,
     deepseq,
