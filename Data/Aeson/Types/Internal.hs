@@ -725,4 +725,3 @@ camelTo c = lastWasCap True
                                              then toLower x : lastWasCap True xs
                                              else c : toLower x : lastWasCap True xs
                                       else x : lastWasCap False xs
-

@@ -1,4 +1,4 @@
-{-# LANGUAGE BangPatterns, OverloadedStrings #-}
+{-# LANGUAGE CPP, BangPatterns, OverloadedStrings #-}
 
 -- |
 -- Module:      Data.Aeson.Encode
@@ -14,24 +14,25 @@
 -- Most frequently, you'll probably want to encode straight to UTF-8
 -- (the standard JSON encoding) using 'encode'.
 --
--- You can convert a 'Builder' (as returned by 'fromValue') to a
--- string using e.g. 'toLazyText'.
-
+-- You can use the conversions to 'Builder's when embedding JSON messages as
+-- parts of a protocol.
 module Data.Aeson.Encode
-    (
-      fromValue
-    , encode
+    ( encode
+
+    -- * Encoding to Builders
+    , encodeToByteStringBuilder
     ) where
 
 import Data.Char (ord)
-import Data.Aeson.Types (ToJSON(..), Value(..))
+import Data.Aeson.Types (ToJSON(..))
 import Data.Aeson.Types.Internal (JsonBuilder(..), IStream(..))
+import Data.Aeson.Encode.ByteString (valueToByteStringBuilder)
 import Data.Monoid (mempty, mappend)
 import Data.Scientific (Scientific, coefficient, base10Exponent)
+import Data.Word (Word8)
 import qualified Data.ByteString.Lazy as L
-import qualified Data.HashMap.Strict as H
 import qualified Data.Text as T
-import qualified Data.Vector as V
+import qualified Data.Text.Encoding as TE
 import Data.ByteString.Builder.Scientific (scientificBuilder)
 import Data.ByteString.Builder
 import Data.ByteString.Builder.Prim ((>*<), (>$<))
@@ -81,7 +82,7 @@ toBuilder (JsonBuilder g) = interpret (g IEnd)
 
       IColon            is' -> char8          ':'  <> interpret is'
 
-      IValue       v    is' -> fromValue      v    <> interpret is'
+      IValue       v    is' -> valueToByteStringBuilder v <> interpret is'
 
       -- Fused:
       IBeginObject_IDoubleQuote is' -> fixed2 ('{','"') <> interpret is'
@@ -121,32 +122,6 @@ string :: String -> Builder
 string = P.primMapListBounded escape
 {-# INLINE string #-}
 
-text :: T.Text -> Builder
-text = P.primUnfoldrBounded escape T.uncons
-{-# INLINE text #-}
-
--- | Encode a JSON value to a 'Builder'.  You can convert this to a
--- string using e.g. 'toLazyText', or encode straight to UTF-8 (the
--- standard JSON encoding) using 'encode'.
-fromValue :: Value -> Builder
-fromValue Null = nullB
-fromValue (Bool b) = if b then trueB
-                          else falseB
-fromValue (Number s) = fromScientific s
-fromValue (String s) = text s
-fromValue (Array v)
-    | V.null v = fixed2 ('[',']')
-    | otherwise = char8 '[' <>
-                  fromValue (V.unsafeHead v) <>
-                  V.foldr f (char8 ']') (V.unsafeTail v)
-  where f a z = char8 ',' <> fromValue a <> z
-fromValue (Object m) =
-    case H.toList m of
-      (x:xs) -> char8 '{' <> one x <> foldr f (char8 '}') xs
-      _      -> fixed2 ('{','}')
-  where f a z     = char8 ',' <> one a <> z
-        one (k,v) = text k <> char8 ':' <> fromValue v
-
 escape :: P.BoundedPrim Char
 escape =
     P.condB (== '\\'  ) (bounded2 ('\\','\\')) $
@@ -155,16 +130,45 @@ escape =
     P.condB (== '\n'  ) (bounded2 ('\\','n' )) $
     P.condB (== '\r'  ) (bounded2 ('\\','r' )) $
     P.condB (== '\t'  ) (bounded2 ('\\','t' )) $
-    P.condB isAngle     (P.liftFixedToBounded hexChar) $
-    (P.liftFixedToBounded hexChar) -- fallback for chars < 0x20
+    P.condB isAngle     (P.liftFixedToBounded hexEscape) $
+    (P.liftFixedToBounded hexEscape) -- fallback for chars < 0x20
   where
     isAngle c = c == '<' || c == '>'
 
-    hexChar :: P.FixedPrim Char
-    hexChar = (\c -> ('\\',('u', fromIntegral (ord c)))) >$<
+    hexEscape :: P.FixedPrim Char
+    hexEscape = (\c -> ('\\',('u', fromIntegral (ord c)))) >$<
               P.char8 >*< P.char8 >*< P.word16HexFixed
 
     bounded2 :: (Char, Char) -> P.BoundedPrim Char
+    bounded2 tup = P.liftFixedToBounded $
+      const tup >$< P.char8 >*< P.char8
+    {-# INLINE bounded2 #-}
+
+{-# INLINE text #-}
+text :: T.Text -> Builder
+text = TE.encodeUtf8BuilderEscaped escapeAscii
+
+-- TODO: Merge with escape
+escapeAscii :: P.BoundedPrim Word8
+escapeAscii =
+    P.condB (== c2w '\\'  ) (bounded2 ('\\','\\')) $
+    P.condB (== c2w '\"'  ) (bounded2 ('\\','"' )) $
+    P.condB (>= c2w '\x20') (P.liftFixedToBounded P.word8) $
+    P.condB (== c2w '\n'  ) (bounded2 ('\\','n' )) $
+    P.condB (== c2w '\r'  ) (bounded2 ('\\','r' )) $
+    P.condB (== c2w '\t'  ) (bounded2 ('\\','t' )) $
+    -- P.condB isAngle         (P.liftFixedToBounded hexEscape) $
+    (P.liftFixedToBounded hexEscape) -- fallback for chars < 0x20
+  where
+    c2w = fromIntegral . ord
+
+    -- isAngle c = c == '<' || c == '>'
+
+    hexEscape :: P.FixedPrim Word8
+    hexEscape = (\c -> ('\\', ('u', fromIntegral c))) >$<
+        P.char8 >*< P.char8 >*< P.word16HexFixed
+
+    bounded2 :: (Char, Char) -> P.BoundedPrim Word8
     bounded2 tup = P.liftFixedToBounded $
       const tup >$< P.char8 >*< P.char8
     {-# INLINE bounded2 #-}
@@ -178,8 +182,12 @@ fromScientific s
 
 -- | Efficiently serialize a JSON value as a lazy 'L.ByteString'.
 encode :: ToJSON a => a -> L.ByteString
-encode = toLazyByteString . toBuilder . toJSON
+encode = toLazyByteString . encodeToByteStringBuilder
 {-# INLINE encode #-}
+
+encodeToByteStringBuilder :: ToJSON a => a -> Builder
+encodeToByteStringBuilder = toBuilder . toJSON
+{-# INLINE encodeToByteStringBuilder #-}
 
 (<>) :: Builder -> Builder -> Builder
 (<>) = mappend
