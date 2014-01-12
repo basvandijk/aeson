@@ -1,21 +1,22 @@
 {-# LANGUAGE CPP, OverloadedStrings, RecordWildCards, ScopedTypeVariables #-}
 
-import Control.Monad (forM)
-import Data.Aeson (eitherDecode)
+-- import Control.Monad (forM)
+import Data.Aeson (decode {-, eitherDecode -})
 import Data.Aeson.Encode
 import Data.Aeson.Parser (value)
 import Data.Aeson.Types
+import Data.Maybe
 import Test.Framework (Test, defaultMain, testGroup)
 import Test.Framework.Providers.QuickCheck2 (testProperty)
-import Test.Framework.Providers.HUnit (testCase)
-import Test.HUnit                     (assertFailure, assertEqual)
+-- import Test.Framework.Providers.HUnit (testCase)
+-- import Test.HUnit                     (assertFailure, assertEqual)
 import Test.QuickCheck (Arbitrary(..))
 import qualified Data.Vector as V
 import qualified Data.Attoparsec.Lazy as L
 import qualified Data.ByteString.Lazy.Char8 as L
 import qualified Data.Text as T
-import qualified Data.Text.Lazy.Builder as TLB
-import qualified Data.Text.Lazy.Encoding as TLE
+-- import qualified Data.Text.Lazy.Builder as TLB
+-- import qualified Data.Text.Lazy.Encoding as TLE
 import qualified Data.HashMap.Strict as H
 import Data.Time.Clock (UTCTime(..))
 import Data.Time (ZonedTime(..))
@@ -45,9 +46,9 @@ encodeDouble num denom
 encodeInteger :: Integer -> Bool
 encodeInteger i = encode i == L.pack (show i)
 
-toParseJSON :: (Arbitrary a, Eq a) => (Value -> Parser a) -> (a -> Value) -> a -> Bool
+toParseJSON :: (Arbitrary a, Eq a) => (Value -> Parser a) -> (a -> JsonBuilder) -> a -> Bool
 toParseJSON parsejson tojson x =
-    case parse parsejson . tojson $ x of
+    case parse parsejson . jsonBuilderToValue . tojson $ x of
       Error _ -> False
       Success x' -> x == x'
 
@@ -61,9 +62,9 @@ roundTripEq :: (Eq a, FromJSON a, ToJSON a) => a -> a -> Bool
 roundTripEq x y = roundTrip (==) x y
 
 toFromJSON :: (Arbitrary a, Eq a, FromJSON a, ToJSON a) => a -> Bool
-toFromJSON x = case fromJSON . toJSON $ x of
-                Error _ -> False
-                Success x' -> x == x'
+toFromJSON x = case decode . encode $ x of
+                Nothing -> False
+                Just x' -> x == x'
 
 modifyFailureProp :: String -> String -> Bool
 modifyFailureProp orig added =
@@ -74,9 +75,13 @@ modifyFailureProp orig added =
     result = parse parser ()
 
 main :: IO ()
+main = defaultMain tests
+
+{-
 main = do
     comparisonTest <- encoderComparisonTests
     defaultMain (comparisonTest : tests)
+-}
 
 #ifdef GHC_GENERICS
 type P6 = Product6 Int Bool String (Approx Double) (Int, Approx Double) ()
@@ -86,6 +91,9 @@ type S4 = Sum4 Int8 ZonedTime T.Text (Map.Map String Int)
 --------------------------------------------------------------------------------
 -- Value properties
 --------------------------------------------------------------------------------
+
+jsonBuilderToValue :: JsonBuilder -> Value
+jsonBuilderToValue = fromJust . decode . encode
 
 isString :: Value -> Bool
 isString (String _) = True
@@ -153,10 +161,10 @@ tests = [
     ],
   testGroup "template-haskell" [
       testGroup "Nullary" [
-          testProperty "string"                (isString                . thNullaryToJSONString)
-        , testProperty "2ElemArray"            (is2ElemArray            . thNullaryToJSON2ElemArray)
-        , testProperty "TaggedObject"          (isTaggedObjectValue     . thNullaryToJSONTaggedObject)
-        , testProperty "ObjectWithSingleField" (isObjectWithSingleField . thNullaryToJSONObjectWithSingleField)
+          testProperty "string"                (isString                . jsonBuilderToValue . thNullaryToJSONString)
+        , testProperty "2ElemArray"            (is2ElemArray            . jsonBuilderToValue . thNullaryToJSON2ElemArray)
+        , testProperty "TaggedObject"          (isTaggedObjectValue     . jsonBuilderToValue . thNullaryToJSONTaggedObject)
+        , testProperty "ObjectWithSingleField" (isObjectWithSingleField . jsonBuilderToValue . thNullaryToJSONObjectWithSingleField)
 
         , testGroup "roundTrip" [
               testProperty "string"                (toParseJSON thNullaryParseJSONString                thNullaryToJSONString)
@@ -166,9 +174,9 @@ tests = [
           ]
         ]
     , testGroup "SomeType" [
-          testProperty "2ElemArray"            (is2ElemArray            . (thSomeTypeToJSON2ElemArray            :: SomeTypeToJSON))
-        , testProperty "TaggedObject"          (isTaggedObject          . (thSomeTypeToJSONTaggedObject          :: SomeTypeToJSON))
-        , testProperty "ObjectWithSingleField" (isObjectWithSingleField . (thSomeTypeToJSONObjectWithSingleField :: SomeTypeToJSON))
+          testProperty "2ElemArray"            (is2ElemArray            . jsonBuilderToValue . (thSomeTypeToJSON2ElemArray            :: SomeTypeToJSON))
+        , testProperty "TaggedObject"          (isTaggedObject          . jsonBuilderToValue . (thSomeTypeToJSONTaggedObject          :: SomeTypeToJSON))
+        , testProperty "ObjectWithSingleField" (isObjectWithSingleField . jsonBuilderToValue . (thSomeTypeToJSONObjectWithSingleField :: SomeTypeToJSON))
 
         , testGroup "roundTrip" [
               testProperty "2ElemArray"            (toParseJSON thSomeTypeParseJSON2ElemArray            (thSomeTypeToJSON2ElemArray            :: SomeTypeToJSON))
@@ -180,15 +188,15 @@ tests = [
 #ifdef GHC_GENERICS
   , testGroup "GHC-generics" [
         testGroup "Nullary" [
-            testProperty "string"                (isString                . gNullaryToJSONString)
-          , testProperty "2ElemArray"            (is2ElemArray            . gNullaryToJSON2ElemArray)
-          , testProperty "TaggedObject"          (isTaggedObjectValue     . gNullaryToJSONTaggedObject)
-          , testProperty "ObjectWithSingleField" (isObjectWithSingleField . gNullaryToJSONObjectWithSingleField)
+            testProperty "string"                (isString                . jsonBuilderToValue . gNullaryToJSONString)
+          , testProperty "2ElemArray"            (is2ElemArray            . jsonBuilderToValue . gNullaryToJSON2ElemArray)
+          , testProperty "TaggedObject"          (isTaggedObjectValue     . jsonBuilderToValue . gNullaryToJSONTaggedObject)
+          , testProperty "ObjectWithSingleField" (isObjectWithSingleField . jsonBuilderToValue . gNullaryToJSONObjectWithSingleField)
           , testGroup "eq" [
-                testProperty "string"                (\n -> gNullaryToJSONString                n == thNullaryToJSONString                n)
-              , testProperty "2ElemArray"            (\n -> gNullaryToJSON2ElemArray            n == thNullaryToJSON2ElemArray            n)
-              , testProperty "TaggedObject"          (\n -> gNullaryToJSONTaggedObject          n == thNullaryToJSONTaggedObject          n)
-              , testProperty "ObjectWithSingleField" (\n -> gNullaryToJSONObjectWithSingleField n == thNullaryToJSONObjectWithSingleField n)
+                testProperty "string"                (\n -> encode (gNullaryToJSONString                n) == encode (thNullaryToJSONString                n))
+              , testProperty "2ElemArray"            (\n -> encode (gNullaryToJSON2ElemArray            n) == encode (thNullaryToJSON2ElemArray            n))
+              , testProperty "TaggedObject"          (\n -> encode (gNullaryToJSONTaggedObject          n) == encode (thNullaryToJSONTaggedObject          n))
+              , testProperty "ObjectWithSingleField" (\n -> encode (gNullaryToJSONObjectWithSingleField n) == encode (thNullaryToJSONObjectWithSingleField n))
             ]
           , testGroup "roundTrip" [
               testProperty "string"                (toParseJSON gNullaryParseJSONString                gNullaryToJSONString)
@@ -198,14 +206,14 @@ tests = [
             ]
           ]
     , testGroup "SomeType" [
-          testProperty "2ElemArray"            (is2ElemArray            . (gSomeTypeToJSON2ElemArray            :: SomeTypeToJSON))
-        , testProperty "TaggedObject"          (isTaggedObject          . (gSomeTypeToJSONTaggedObject          :: SomeTypeToJSON))
-        , testProperty "ObjectWithSingleField" (isObjectWithSingleField . (gSomeTypeToJSONObjectWithSingleField :: SomeTypeToJSON))
+          testProperty "2ElemArray"            (is2ElemArray            . jsonBuilderToValue . (gSomeTypeToJSON2ElemArray            :: SomeTypeToJSON))
+        , testProperty "TaggedObject"          (isTaggedObject          . jsonBuilderToValue . (gSomeTypeToJSONTaggedObject          :: SomeTypeToJSON))
+        , testProperty "ObjectWithSingleField" (isObjectWithSingleField . jsonBuilderToValue . (gSomeTypeToJSONObjectWithSingleField :: SomeTypeToJSON))
 
         , testGroup "eq" [
-              testProperty "2ElemArray"            (\n -> (gSomeTypeToJSON2ElemArray            :: SomeTypeToJSON) n == thSomeTypeToJSON2ElemArray            n)
-            , testProperty "TaggedObject"          (\n -> (gSomeTypeToJSONTaggedObject          :: SomeTypeToJSON) n == thSomeTypeToJSONTaggedObject          n)
-            , testProperty "ObjectWithSingleField" (\n -> (gSomeTypeToJSONObjectWithSingleField :: SomeTypeToJSON) n == thSomeTypeToJSONObjectWithSingleField n)
+              testProperty "2ElemArray"            (\n -> encode ((gSomeTypeToJSON2ElemArray            :: SomeTypeToJSON) n) == encode (thSomeTypeToJSON2ElemArray            n))
+            , testProperty "TaggedObject"          (\n -> encode ((gSomeTypeToJSONTaggedObject          :: SomeTypeToJSON) n) == encode (thSomeTypeToJSONTaggedObject          n))
+            , testProperty "ObjectWithSingleField" (\n -> encode ((gSomeTypeToJSONObjectWithSingleField :: SomeTypeToJSON) n) == encode (thSomeTypeToJSONObjectWithSingleField n))
           ]
         , testGroup "roundTrip" [
             testProperty "2ElemArray"            (toParseJSON gSomeTypeParseJSON2ElemArray            (gSomeTypeToJSON2ElemArray            :: SomeTypeToJSON))
@@ -222,6 +230,7 @@ tests = [
 -- Comparison between bytestring and text encoders
 ------------------------------------------------------------------------------
 
+{-
 encoderComparisonTests :: IO Test
 encoderComparisonTests = do
     encoderTests <- forM testFiles $ \file0 -> do
@@ -251,3 +260,4 @@ encoderComparisonTests = do
       , "twitter100.json"
       , "twitter50.json"
       ]
+-}
