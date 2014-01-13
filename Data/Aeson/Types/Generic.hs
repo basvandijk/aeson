@@ -279,7 +279,7 @@ instance ( HeadTailElements a, HeadTailElements b
       in (ha, ta <> element hb <> tb)
     {-# INLINE headTailElements #-}
 
-instance (GToJSON a) => HeadTailElements a where
+instance (GToJSON a) => HeadTailElements (S1 c a) where
     headTailElements opts = \x -> (gToJSON opts x, mempty)
     {-# INLINE headTailElements #-}
 
