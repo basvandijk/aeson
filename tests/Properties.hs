@@ -1,11 +1,10 @@
 {-# LANGUAGE CPP, OverloadedStrings, RecordWildCards, ScopedTypeVariables #-}
 
 -- import Control.Monad (forM)
-import Data.Aeson (decode {-, eitherDecode -})
+import Data.Aeson ({-, eitherDecode -})
 import Data.Aeson.Encode
 import Data.Aeson.Parser (value)
 import Data.Aeson.Types
-import Data.Maybe
 import Test.Framework (Test, defaultMain, testGroup)
 import Test.Framework.Providers.QuickCheck2 (testProperty)
 -- import Test.Framework.Providers.HUnit (testCase)
@@ -54,7 +53,7 @@ toParseJSON parsejson tojson x =
 
 roundTrip :: (FromJSON a, ToJSON a) => (a -> a -> Bool) -> a -> a -> Bool
 roundTrip eq _ i =
-    case fmap fromJSON . L.parse value . encode . toJSON $ i of
+    case fmap fromJSON . L.parse value . encode $ i of
       L.Done _ (Success v) -> v `eq` i
       _                    -> False
 
@@ -62,9 +61,9 @@ roundTripEq :: (Eq a, FromJSON a, ToJSON a) => a -> a -> Bool
 roundTripEq x y = roundTrip (==) x y
 
 toFromJSON :: (Arbitrary a, Eq a, FromJSON a, ToJSON a) => a -> Bool
-toFromJSON x = case decode . encode $ x of
-                Nothing -> False
-                Just x' -> x == x'
+toFromJSON x = case fmap fromJSON . L.parse value . encode $ x of
+                 L.Done _ (Success x') -> x == x'
+                 _ -> False
 
 modifyFailureProp :: String -> String -> Bool
 modifyFailureProp orig added =
@@ -93,7 +92,9 @@ type S4 = Sum4 Int8 ZonedTime T.Text (Map.Map String Int)
 --------------------------------------------------------------------------------
 
 jsonBuilderToValue :: JsonBuilder -> Value
-jsonBuilderToValue = fromJust . decode . encode
+jsonBuilderToValue jb = case L.parse value . encode $ jb of
+                          L.Done _ v -> v
+                          _ -> error "The impossible happened!"
 
 isString :: Value -> Bool
 isString (String _) = True

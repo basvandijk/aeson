@@ -8,6 +8,8 @@ module Properties.Deprecated (deprecatedTests) where
 
 import Data.Aeson.Types
 import Data.Aeson
+import Data.Aeson.Parser (value)
+import qualified Data.Attoparsec.Lazy as L
 import Data.Data (Data)
 import Test.Framework (Test, testGroup)
 import Test.Framework.Providers.QuickCheck2 (testProperty)
@@ -22,12 +24,16 @@ genericTo :: (Data a, ToJSON a) => a -> a -> Bool
 genericTo _ v = G.encode v == encode v
 
 genericFrom :: (Eq a, Data a, ToJSON a) => a -> a -> Bool
-genericFrom _ v = G.decode (encode v) == Just v
+genericFrom _ x =
+    case fmap G.fromJSON . L.parse value . encode $ x of
+      L.Done _ (Success x') -> x == x'
+      _ -> False
 
 genericToFromJSON :: (Arbitrary a, Eq a, Data a) => a -> Bool
-genericToFromJSON x = case G.decode . G.encode $ x of
-                Nothing -> False
-                Just x' -> x == x'
+genericToFromJSON x =
+    case fmap G.fromJSON . L.parse value . G.encode $ x of
+      L.Done _ (Success x') -> x == x'
+      _ -> False
 
 regress_gh72 :: [(String, Maybe String)] -> Bool
 regress_gh72 ys = G.decode (G.encode m) == Just m
