@@ -1,4 +1,4 @@
-{-# LANGUAGE CPP, BangPatterns, OverloadedStrings #-}
+{-# LANGUAGE BangPatterns, CPP, OverloadedStrings #-}
 
 -- |
 -- Module:      Data.Aeson.Parser.Internal
@@ -28,22 +28,12 @@ module Data.Aeson.Parser.Internal
     , eitherDecodeStrictWith
     ) where
 
-#if defined(USE_BLAZE_BUILDER)
-import Blaze.ByteString.Builder (Builder, fromByteString, toByteString)
-import Blaze.ByteString.Builder.Char.Utf8 (fromChar)
-import Blaze.ByteString.Builder.Word (fromWord8)
-#else
-#if MIN_VERSION_bytestring(0,10,2)
 import Data.ByteString.Builder
-#else
-import Data.ByteString.Lazy.Builder
-#endif
   (Builder, byteString, toLazyByteString, charUtf8, word8)
-#endif
 
 import Control.Applicative ((*>), (<$>), (<*), liftA2, pure)
 import Data.Aeson.Types (Result(..), Value(..))
-import Data.Attoparsec.Char8 (Parser, char, endOfInput, rational,
+import Data.Attoparsec.Char8 (Parser, char, endOfInput, scientific,
                               skipSpace, string)
 import Data.Bits ((.|.), shiftL)
 import Data.ByteString (ByteString)
@@ -173,7 +163,7 @@ value = do
     C_t           -> string "true" *> pure (Bool True)
     C_n           -> string "null" *> pure Null
     _              | w >= 48 && w <= 57 || w == 45
-                  -> Number <$> rational
+                  -> Number <$> scientific
       | otherwise -> fail "not a valid json value"
 
 -- | Strict version of 'value'. See also 'json''.
@@ -191,7 +181,7 @@ value' = do
     C_n           -> string "null" *> pure Null
     _              | w >= 48 && w <= 57 || w == 45
                   -> do
-                     !n <- rational
+                     !n <- scientific
                      return (Number n)
       | otherwise -> fail "not a valid json value"
 
@@ -331,21 +321,6 @@ jsonEOF = json <* skipSpace <* endOfInput
 jsonEOF' :: Parser Value
 jsonEOF' = json' <* skipSpace <* endOfInput
 
-#if defined(USE_BLAZE_BUILDER)
-byteString :: ByteString -> Builder
-byteString = fromByteString
-{-# INLINE byteString #-}
-
-charUtf8 :: Char -> Builder
-charUtf8 = fromChar
-{-# INLINE charUtf8 #-}
-
-word8 :: Word8 -> Builder
-word8 = fromWord8
-{-# INLINE word8 #-}
-
-#else
 toByteString :: Builder -> ByteString
 toByteString = L.toStrict . toLazyByteString
 {-# INLINE toByteString #-}
-#endif

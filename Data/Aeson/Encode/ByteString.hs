@@ -19,12 +19,11 @@ import Prelude hiding (null)
 import Data.Aeson.Types (Value(..))
 import Data.Char (ord)
 import Data.Scientific (Scientific, coefficient, base10Exponent)
-
 import Data.Word (Word8)
 import Data.Monoid (mappend)
 import           Data.ByteString.Builder      as B
 import           Data.ByteString.Builder.Prim as BP
-import Data.ByteString.Builder.Scientific (scientificBuilder)
+import           Data.ByteString.Builder.Scientific (scientificBuilder)
 import qualified Data.HashMap.Strict as HMS
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE

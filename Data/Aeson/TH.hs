@@ -108,10 +108,6 @@ import Data.Maybe          ( Maybe(Nothing, Just), catMaybes )
 import Prelude             ( String, (-), Integer, fromIntegral, error )
 import Text.Printf         ( printf )
 import Text.Show           ( show )
-#if __GLASGOW_HASKELL__ < 700
-import Control.Monad       ( (>>=), (>>) )
-import Prelude             ( fromInteger )
-#endif
 -- from unordered-containers:
 import qualified Data.HashMap.Strict as H ( lookup, toList )
 -- from template-haskell:
@@ -169,7 +165,7 @@ deriveToJSON opts name =
   where
     fromCons :: [TyVarBndr] -> [Con] -> Q Dec
     fromCons tvbs cons =
-        instanceD (return $ map (\t -> ClassP ''ToJSON [VarT t]) typeNames)
+        instanceD (applyCon ''ToJSON typeNames)
                   (classType `appT` instanceType)
                   [ funD 'toJSON
                          [ clause []
@@ -365,7 +361,7 @@ deriveFromJSON opts name =
   where
     fromCons :: [TyVarBndr] -> [Con] -> Q Dec
     fromCons tvbs cons =
-        instanceD (return $ map (\t -> ClassP ''FromJSON [VarT t]) typeNames)
+        instanceD (applyCon ''FromJSON typeNames)
                   (classType `appT` instanceType)
                   [ funD 'parseJSON
                          [ clause []
@@ -865,3 +861,12 @@ valueConName (String _) = "String"
 valueConName (Number _) = "Number"
 valueConName (Bool   _) = "Boolean"
 valueConName Null       = "Null"
+
+applyCon :: Name -> [Name] -> Q [Pred]
+applyCon con typeNames = return (map apply typeNames)
+  where apply t =
+#if __GLASGOW_HASKELL__ >= 709
+          AppT (ConT con) (VarT t)
+#else
+          ClassP con [VarT t]
+#endif
