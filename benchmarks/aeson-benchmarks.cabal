@@ -66,3 +66,26 @@ executable aeson-benchmark-json-parse
     deepseq,
     json,
     time
+
+executable aeson-benchmark-istream
+  main-is: AesonIStream.hs
+  hs-source-dirs: . ..
+  ghc-options: -Wall -O2 -rtsopts
+  cpp-options: -DGENERICS
+  build-depends:
+    aeson,
+    base,
+    criterion,
+    bytestring,
+    vector,
+    unordered-containers,
+    time,
+    text,
+    hashable,
+    scientific,
+    deepseq,
+    containers,
+    old-locale,
+    attoparsec,
+    dlist
+
